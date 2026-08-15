@@ -65,6 +65,19 @@ Symptom:
 
 Treat this as a live service response, not a local parser failure. Retry once after a short wait. If it persists, report it separately from local test results.
 
+## Research Execution Timeout Or Channel Failure
+
+If `research exec` or `research run` times out or reports a WebSocket/channel error, preserve the original error and let jqcli finish its `finally` cleanup. Do not attach to, interrupt, or delete a kernel/session returned by the read-only list unless it was created by the current invocation.
+
+After the command returns, compare read-only counts with a baseline:
+
+```powershell
+.\.venv\Scripts\jqcli.exe --format json --non-interactive research kernels
+.\.venv\Scripts\jqcli.exe --format json --non-interactive research sessions
+```
+
+Report counts and cleanup status only; do not include identifiers, Notebook paths, code, or output unless the user explicitly requested those details. `research run` never saves execution outputs back to the remote Notebook.
+
 ## Local Data Paths
 
 Expected ignored local state:

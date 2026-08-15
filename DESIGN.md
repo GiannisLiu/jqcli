@@ -1,6 +1,6 @@
 # jqcli 设计文档
 
-聚宽（JoinQuant）策略与回测管理命令行工具。
+聚宽（JoinQuant）策略、回测与研究工作区管理命令行工具。
 
 MVP 目标：在 Windows 和常见命令行环境中稳定运行，并能被 agent/skill 以非交互方式调用。人类友好的表格、确认提示、编辑器集成可以提供，但不能影响自动化主路径。
 
@@ -23,7 +23,9 @@ jqcli
 ├── auth        认证管理
 ├── strategy    策略管理
 ├── backtest    回测管理
-└── community   社区文章
+├── research    研究文件管理
+├── community   社区文章
+└── web         本地文章管理界面
 ```
 
 ### 技术选型
@@ -32,6 +34,7 @@ jqcli
 |------|------|------|
 | CLI 框架 | `click` | 子命令分组、参数解析、帮助生成 |
 | HTTP 客户端 | `httpx` | 同步请求，统一超时 |
+| WebSocket 客户端 | `websockets>=15,<16` | Jupyter channels 同步通信；禁用代理并显式限定同源凭据 |
 | 配置存储 | JSON 文件 | 跨平台配置路径 |
 | 凭据来源 | 环境变量优先，配置文件兜底 | 避免 keyring 在 agent/CI 中卡住 |
 | 输出渲染 | `rich` 可选 | 只用于 table 输出；JSON 输出不用 rich |
@@ -154,6 +157,7 @@ JSON 错误格式：
 - 登录、token/cookie 校验方式。
 - 策略列表、新建、读取、更新、删除接口。
 - 回测提交、列表、详情接口。
+- 研究平台 SSO、Contents API 和动态用户 base path。
 - 认证失败、资源不存在、限流、服务端错误的响应格式。
 
 MVP 不强制抽象完整领域模型，只要求内部字段稳定映射到 JSON 输出。策略和回测至少包含以下字段：
@@ -184,6 +188,62 @@ MVP 不强制抽象完整领域模型，只要求内部字段稳定映射到 JSO
   "metrics": {}
 }
 ```
+
+### Research
+
+研究平台不是 `/algorithm` 接口：主站 Cookie 先读取 `/default/research/redirect`，将页面中的短期字段 POST 到同源 `/hub/login`，跟随 JupyterHub/OAuth 重定向后从 Notebook 页面 `data-base-url` 获取动态 `/user/<user>/` 前缀。整个过程必须使用同一可更新 cookie jar，且不得输出用户名、短期 token 或 Hub cookie。
+
+当前真实环境为 Jupyter Notebook 5.4.1，读取接口为：
+
+```text
+GET <base>/api/contents/<path>?content=0|1
+```
+
+CLI 对资源模型做稳定的字段裁剪：
+
+```json
+{
+  "name": "factor.ipynb",
+  "path": "research/factor.ipynb",
+  "type": "notebook",
+  "writable": true,
+  "created": "2026-08-14T08:00:00Z",
+  "last_modified": "2026-08-14T09:00:00Z",
+  "mimetype": null,
+  "format": null,
+  "size": null
+}
+```
+
+目录的 `content` 是一层子项数组；文件正文只有显式请求时才返回。远端路径统一转换为 `/`，逐段 URL 编码并拒绝 `.`、`..`、空组件和 NUL。
+
+Jupyter 写接口还依赖 `_xsrf` 与 `X-XSRFToken`。上传、建目录、移动和删除以实例自报的 Notebook 5.4.1 同版本官方实现为契约，并只使用 mock 测试验证；真实账号验收保持只读。
+
+研究实例还开放同版本 Jupyter KernelSpec、Kernel 与 Session API：
+
+```text
+GET    <base>/api/kernelspecs
+GET    <base>/api/kernels
+POST   <base>/api/kernels
+DELETE <base>/api/kernels/<kernel_id>
+GET    <base>/api/sessions
+POST   <base>/api/sessions
+DELETE <base>/api/sessions/<session_id>
+WS     <base>/api/kernels/<kernel_id>/channels?session_id=<client_session_id>
+```
+
+真实账号只读探测确认 `kernelspecs` 返回 `200` 和 3 个规格，`kernels`、`sessions` 均返回 `200` 和空列表；对随机且确定不存在的标准 UUID 进行普通 channels GET 返回 `404`。路由与 WebSocket 消息格式再以 Notebook 5.4.1 官方 `kernel.js`、`session.js` 及服务端 handler 交叉确认。探测没有读取研究文件正文，也没有启动、连接或停止现有内核。
+
+远端执行遵守以下资源与安全模型：
+
+1. `research exec` 每次创建使用高熵合成路径的临时 session 与新内核；`research run` 每次创建关联目标 Notebook 的高熵临时 session 与新内核。合成路径只用于追踪和清理，不调用 Contents 保存接口；两者绝不选择或复用 `research kernels`、`research sessions` 中的现有对象。
+2. WebSocket 只连接刚创建的内核，沿用动态 base path、已更新的 Cookie 与同源 `Origin`；任何自动跨源重定向都视为协议错误。
+3. 代码通过 Jupyter `execute_request` 发送；客户端收集 `stream`、`display_data`、`execute_result`、`error`、`execute_reply` 与状态事件，并以匹配的父消息 id 判定归属。
+4. 成功、执行错误、超时、协议失败或用户中断均进入 `finally` 清理路径；优先删除临时 session，并确保临时 kernel 被停止。清理不得作用于调用开始前已存在的对象。
+5. 执行任意代码可能产生文件、网络或计算副作用，因此即使在交互式 table 模式也必须显式传 `--yes`，不以提示确认替代。
+6. `research run` 只读取用户明确指定的 Notebook；默认且当前始终不调用 Contents 保存接口，执行输出不会写回远端 Notebook。
+
+全局 `--timeout` 仍约束单次 HTTP 操作；执行等待由命令级 `--execution-timeout` 单独约束。非流式模式在结束后输出结构化结果；`--stream` 仅支持 JSON 格式，按到达顺序逐行输出 JSONL 事件，末行固定为 `{"event":"done","result":{...}}`，便于实时消费标准输出、展示结果与错误。
 
 时间使用 ISO 8601；CLI 日期输入使用 `YYYY-MM-DD`；百分比在 JSON 中使用小数值，例如 `0.1832`。
 
@@ -373,6 +433,106 @@ jqcli community clone-strategy <post_id>
 - JSON 检查输出会隐藏 `secret`，只返回 `secret_present` 和 `random_present`。
 - 回复中附带回测时可传 `--reply-id`。
 
+### `jqcli research ls`
+
+列出研究根目录或指定子目录的一层内容。
+
+```
+jqcli research ls [path]
+```
+
+- 默认路径为空，等价于根目录。
+- JSON 返回 `path`、`items` 和 `total`。
+- 不递归，不读取文件正文。
+
+### `jqcli research show`
+
+```
+jqcli research show <path> [--content]
+```
+
+- 默认只读取元数据。
+- `--content` 对 Notebook 返回 JSON 模型，对文本文件返回字符串，对二进制文件保留 base64。
+
+### `jqcli research download`
+
+```
+jqcli research download <path> [--output <local-path>] [--force]
+```
+
+- 只读取远端并写入本地，不修改研究平台资产。
+- 默认以远端 basename 作为本地文件名。
+- 目标已存在时失败；只有 `--force` 才覆盖。
+- 文本使用 UTF-8，Notebook 写为 JSON，base64 内容先解码；目录不可下载。
+
+### `jqcli research upload`
+
+```
+jqcli research upload <local-path> [remote-path] [--force] [--yes]
+```
+
+- `.ipynb` 使用 `type=notebook, format=json`；UTF-8 文件使用 `type=file, format=text`；二进制使用 `format=base64`。
+- 远端目标存在时默认失败，只有 `--force` 才覆盖。
+- 非交互模式或 JSON 模式必须显式传 `--yes`；交互式 table 模式会确认。
+- 当前单次上传上限为 25 MiB，不实现 Jupyter 前端的大文件分块协议。
+
+### `jqcli research mkdir / mv / rm`
+
+```
+jqcli research mkdir <path> [--yes]
+jqcli research mv <source> <destination> [--yes]
+jqcli research rm <path> [--yes]
+```
+
+- 三类命令都修改远端研究资产，非交互模式或 JSON 模式必须传 `--yes`，交互式 table 模式会确认。
+- 根目录不能创建、移动或删除。
+- 删除调用 Contents `DELETE`；不假设聚宽实例一定提供可恢复回收站。
+
+### `jqcli research kernelspecs / kernels / sessions`
+
+```
+jqcli research kernelspecs
+jqcli research kernels
+jqcli research sessions
+```
+
+- 三个命令均为只读发现接口，不创建、连接、停止或复用远端对象。
+- JSON 输出裁剪为稳定模型；不得把 Cookie、短期 SSO token 或未请求的 Notebook 内容带入输出。
+- 自动化冒烟摘要只记录数量和布尔值，不输出 kernel/session id、Notebook 路径或内核规格名称。
+
+### `jqcli research exec`
+
+```
+jqcli research exec (--file <local.py> | --code-stdin)
+                    [--kernel <name>]
+                    [--execution-timeout <seconds>]
+                    [--stream]
+                    --yes
+```
+
+- `--file` 与 `--code-stdin` 互斥且必须选择一个；代码按 UTF-8 读取。
+- `--kernel` 省略时使用服务端默认内核。
+- 每次调用创建并只连接 jqcli 自己的临时 session 与新内核，合成 session 不保存研究文件，结束时无条件清理。
+- `--stream` 仅支持 `--format json`，输出按到达顺序排列的 JSONL 执行事件，并以 `done` 事件结束；不传时在执行完成后输出结构化结果。
+- `--yes` 永远必需，因为代码本身可能修改研究资产或其他远端状态。
+
+### `jqcli research run`
+
+```
+jqcli research run <remote.ipynb>
+                   [--cell <zero-based-index>]...
+                   [--kernel <name>]
+                   [--execution-timeout <seconds>]
+                   [--stream]
+                   --yes
+```
+
+- 默认按 Notebook 原始顺序执行全部 code cell；重复传 `--cell` 时只执行指定的零基索引单元。
+- 未显式传 `--kernel` 时优先使用 Notebook `metadata.kernelspec.name`，缺失时回退平台默认内核。
+- 只读取明确指定的 Notebook 正文，不递归读取其他工作区文件。
+- 执行结果只返回给调用方，默认且当前始终不保存回 Notebook。
+- 临时资源、超时、流式输出与强制 `--yes` 规则同 `research exec`。
+
 ---
 
 ## 七、错误处理
@@ -405,13 +565,16 @@ jqcli/
 │   │   ├── auth.py
 │   │   ├── strategy.py
 │   │   ├── backtest.py
-│   │   └── community.py
+│   │   ├── community.py
+│   │   ├── research.py
+│   │   └── research_execution.py
 │   ├── commands/
 │   │   ├── __init__.py
 │   │   ├── auth.py
 │   │   ├── strategy.py
 │   │   ├── backtest.py
-│   │   └── community.py
+│   │   ├── community.py
+│   │   └── research.py
 │   ├── config.py
 │   ├── errors.py
 │   └── output.py
@@ -440,7 +603,8 @@ jqcli/
 - 非交互测试：所有破坏性命令在 `--non-interactive` 且无 `--yes` 时必须失败。
 - JSON 测试：`--format json` 下 stdout 必须可被 `json.loads` 解析。
 - stdin 测试：只有显式 `--password-stdin`、`--code-stdin` 时才读取 stdin。
-- API 测试：使用 `pytest-httpx` 或 `respx` mock 聚宽响应，不访问真实服务。
+- API 测试：使用 `httpx.MockTransport` mock 聚宽响应，不访问真实服务。
+- 研究测试：覆盖 SSO 脱敏、跨域拒绝、cookie 更新、中文/空格路径编码、Contents 模型、三种下载格式、WebSocket 消息、输出预算、超时/异常清理和 JSONL 终止事件。
 - 回归测试：每个 MVP 命令至少覆盖一个成功路径和一个错误路径。
 
 ---
@@ -457,4 +621,8 @@ jqcli/
 8. `strategy new / edit`，支持 `--file` 和 `--code-stdin`。
 9. `backtest run / show / ls`。
 10. `strategy rm` 和可用时的 `backtest rm`，强制非交互确认规则。
-11. 真实账号手工验收，并更新 README 的接口风险说明。
+11. `research ls / show / download`，先完成只读 SSO 与 Contents API。
+12. 基于同版本官方契约实现 `research upload / mkdir / mv / rm`，只使用 mock 验证写路径。
+13. 只读确认 `research kernelspecs / kernels / sessions` 与 channels 路由开放，并与 Notebook 5.4.1 官方实现交叉验证。
+14. 实现独占临时会话/内核上的 `research exec / run`、执行事件收集、超时与 `finally` 清理；Notebook 默认不保存。
+15. 真实账号只读验收，并更新 README 的接口风险说明；临时执行验证仅在用户明确授权时进行。

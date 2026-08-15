@@ -1,8 +1,8 @@
 # jqcli
 
-聚宽（JoinQuant）策略与回测管理命令行工具。
+聚宽（JoinQuant）策略、回测与研究工作区管理命令行工具。
 
-`jqcli` 面向自动化调用和真实聚宽网页接口封装，支持认证、策略管理、正式回测、编译运行记录查询与删除、社区最新文章列表。所有命令都可以使用 `--non-interactive --format json` 作为机器可读主路径。
+`jqcli` 面向自动化调用和真实聚宽网页接口封装，支持认证、策略管理、正式回测、编译运行记录查询与删除、研究文件管理与远端执行、社区最新文章列表。所有命令都可以使用 `--non-interactive --format json` 作为机器可读主路径。
 
 ## 安装与运行
 
@@ -10,7 +10,7 @@
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install -e ".[test]"
 .venv/bin/jqcli --help
 ```
 
@@ -35,8 +35,8 @@ JQCLI_COOKIE=your_cookie
 
 凭据优先级：
 
-1. 命令行 `--token` / `--cookie`
-2. 环境变量 `JQCLI_TOKEN` / `JQCLI_COOKIE`
+1. 环境变量 `JQCLI_TOKEN` / `JQCLI_COOKIE`
+2. 命令行 `--token` / `--cookie`
 3. 本地配置文件中保存的 `token` / `cookie`
 4. `auth login` 使用 `JQCLI_USERNAME` / `JQCLI_PASSWORD` 或 stdin 密码登录后保存 cookie
 
@@ -1076,6 +1076,138 @@ jqcli --env-file .env --format json community clone-strategy <post_id> --backtes
 - `reason=deny`：积分不足或无权限
 - `secret` 不会输出，只返回 `secret_present`
 
+## Research API
+
+研究平台与策略接口不是同一套服务。聚宽的 `/research` 会先通过 `/default/research/redirect` 建立短期 JupyterHub 会话，再访问账号对应的 Jupyter Contents API。`jqcli` 复用 `auth login` 保存的网页 Cookie，并在内存中完成这次 SSO；一次性用户名、会话 token 和 Hub cookie 不会出现在命令输出中。
+
+这里的账号研究工作区也不同于 Community 输出里的 `research.notebook_*`：后者只是社区文章附带的 Notebook 元数据，不能用于管理“我的研究”文件。
+
+`ls` 和不带 `--content` 的 `show` 已经过真实账号只读验证，验收过程没有读取用户文件正文。下载的内容解码，以及上传、建目录、移动和删除，依据实例自报的 Jupyter Notebook 5.4.1 及其同版本官方 [Contents 客户端](https://github.com/jupyter/notebook/blob/5.4.1/notebook/static/services/contents.js) 与 [XSRF 实现](https://github.com/jupyter/notebook/blob/5.4.1/notebook/static/base/js/utils.js)契约，并由 mock 单元测试固化；这些远端文件写操作没有在真实账号上执行。
+
+同一实例还开放了 Jupyter 5.4.1 的 KernelSpec、Kernel、Session HTTP API 与 Kernel channels 路由。真实账号只读探测中，`kernelspecs` 返回 `200` 且共有 3 项，`kernels` 与 `sessions` 均返回 `200` 且为空列表；对随机、确定不存在的标准 UUID 发起普通 channels GET 返回 `404`。路由及消息契约同时以同版本官方 [Kernel 客户端](https://github.com/jupyter/notebook/blob/5.4.1/notebook/static/services/kernels/kernel.js)、[Session 客户端](https://github.com/jupyter/notebook/blob/5.4.1/notebook/static/services/sessions/session.js)、[Kernel handler](https://github.com/jupyter/notebook/blob/5.4.1/notebook/services/kernels/handlers.py) 与 [Session handler](https://github.com/jupyter/notebook/blob/5.4.1/notebook/services/sessions/handlers.py)为依据。只读探测没有启动、连接或停止任何现有内核。
+
+受控真实验收随后用独占临时会话执行了 `1 + 1`：WebSocket 执行状态为 `ok`，结果为 `2`；执行前后 `kernels` 与 `sessions` 数量均为 `0`。该验收没有读取或保存 Notebook，也没有连接现有内核。`exec`/`run` 的临时会话使用高熵合成路径，Jupyter Session API 只建立内存会话；即使创建响应丢失，jqcli 也只会按该精确合成路径找回并清理自己的会话。
+
+研究命令需要 Cookie 登录态；只有 Bearer token 时请先执行：
+
+```bash
+jqcli --env-file .env --format json auth login
+```
+
+### research ls
+
+列出研究根目录或指定子目录。远端路径始终使用 `/` 分隔；根目录可以省略或写成 `/`。
+
+```bash
+jqcli --format json research ls
+jqcli --format json research ls "因子研究/2026"
+```
+
+输出：
+
+```json
+{
+  "path": "因子研究/2026",
+  "items": [
+    {
+      "name": "示例研究.ipynb",
+      "path": "因子研究/2026/示例研究.ipynb",
+      "type": "notebook",
+      "writable": true,
+      "created": "2026-08-14T08:00:00Z",
+      "last_modified": "2026-08-14T09:00:00Z",
+      "mimetype": null,
+      "format": null,
+      "size": null
+    }
+  ],
+  "total": 1
+}
+```
+
+`type` 可能是 `directory`、`file` 或 `notebook`。列表只返回一层，不递归读取子目录或文件内容。
+
+### research show
+
+默认只读取资源元数据；传 `--content` 才请求正文。Notebook 正文保持 Jupyter JSON 模型，文本文件正文为字符串，二进制文件正文通常为 base64。
+
+```bash
+jqcli --format json research show "因子研究/示例.py"
+jqcli --format json research show "因子研究/示例.py" --content
+```
+
+### research download
+
+把普通文件或 Notebook 保存到本地。省略 `--output` 时使用远端文件名；目标已存在时默认失败，只有显式传 `--force` 才覆盖。本命令只写本地文件，不修改研究平台内容。
+
+```bash
+jqcli --format json research download "因子研究/示例.py" --output local/data/example.py
+jqcli --format json research download "因子研究/报告.ipynb" -o local/data/report.ipynb --force
+```
+
+文本按 UTF-8 保存，Notebook 按 JSON 保存，base64 文件会先解码。目录不能下载。
+
+### research kernelspecs / kernels / sessions
+
+只读查看聚宽研究实例公开的内核规格、当前内核与当前会话：
+
+```bash
+jqcli --format json research kernelspecs
+jqcli --format json research kernels
+jqcli --format json research sessions
+```
+
+这些命令不创建、连接、停止或复用任何内核/会话。自动化冒烟检查只应汇总数量和布尔状态，不应输出会话标识、Notebook 路径或其他用户资产信息。
+
+### research exec
+
+在聚宽研究环境中远端执行一段 Python 代码：
+
+```bash
+jqcli --non-interactive --format json research exec --file local/check.py --yes
+printf 'print(1 + 1)\n' | jqcli --non-interactive --format json research exec --code-stdin --yes
+jqcli --non-interactive --format json research exec --file local/check.py --kernel python3 --execution-timeout 120 --stream --yes
+```
+
+`--file` 与 `--code-stdin` 二选一。省略 `--kernel` 时使用服务器默认内核；`--execution-timeout` 只限制远端执行等待时间。`--stream` 仅支持 `--format json`，按到达顺序每行输出一个 JSON 事件，适合实时消费标准输出、展示结果和错误信息；最后一行固定为 `{"event":"done","result":{...}}`。
+
+远端代码可能读写文件、访问网络或消耗计算资源，因此该命令无论输出格式及是否为交互终端都必须显式传 `--yes`。每次调用只使用 jqcli 新建的独占临时会话及其新内核，不会连接或复用列表中的现有对象；成功、执行错误、超时及用户中断都会在 `finally` 路径清理临时资源。这个合成会话仅用于可靠追踪和清理内核，不会创建或保存研究文件。
+
+### research run
+
+远端执行已有 Notebook 的代码单元，默认按原始顺序运行全部代码单元；可重复传 `--cell` 只运行指定的零基索引单元：
+
+```bash
+jqcli --non-interactive --format json research run "因子研究/报告.ipynb" --yes
+jqcli --non-interactive --format json research run "因子研究/报告.ipynb" --cell 0 --cell 3 --execution-timeout 300 --yes
+jqcli --non-interactive --format json research run "因子研究/报告.ipynb" --kernel python3 --stream --yes
+```
+
+`--execution-timeout` 与 `--stream` 的语义同 `research exec`。未传 `--kernel` 时，`run` 优先使用 Notebook `metadata.kernelspec.name`，缺失时再使用平台默认内核。`run` 会读取用户明确指定的 Notebook 正文，并在独占临时会话/内核中执行选定单元；它默认且当前始终不把输出保存回远端 Notebook，也不会修改任何现有会话或内核。由于 Notebook 代码本身仍可能产生远端副作用，`--yes` 同样是必需参数。
+
+### research upload
+
+上传本地文件。省略远端路径时使用本地 basename；`.ipynb` 以 Notebook JSON 上传，UTF-8 文件以文本上传，其他文件使用 base64。
+
+```bash
+jqcli --format json research upload local/factor.py "因子研究/factor.py" --yes
+jqcli --non-interactive --format json research upload local/report.ipynb "报告/report.ipynb" --yes
+```
+
+远端目标已存在时默认失败；同时传 `--force` 才允许覆盖。非交互模式或 `--format json` 必须显式传 `--yes`；交互式 table 模式不传时会要求确认。当前不实现大文件分块上传；请把单个上传文件控制在 25 MiB 以内。
+
+### research mkdir / mv / rm
+
+创建目录、移动/重命名资源和删除资源：
+
+```bash
+jqcli --non-interactive --format json research mkdir "因子研究/2026" --yes
+jqcli --non-interactive --format json research mv "旧路径/demo.py" "新路径/demo.py" --yes
+jqcli --non-interactive --format json research rm "临时/demo.py" --yes
+```
+
+这三类命令会修改远端研究资产；非交互模式或 `--format json` 必须传 `--yes`，交互式 table 模式会要求确认。根目录不能作为创建、移动或删除目标。删除语义由聚宽当前 Jupyter Contents 实现决定，CLI 不承诺资源一定进入可恢复的回收站。
+
 ## 状态与错误码
 
 回测列表状态映射：
@@ -1104,11 +1236,14 @@ jqcli --env-file .env --format json community clone-strategy <post_id> --backtes
 
 ## 真实测试记录
 
-截至 2026-04-25，已用真实聚宽账号验证：
+截至 2026-08-15，已用真实聚宽账号验证：
 
 - `auth login/status/logout/import-cookie`
 - `strategy ls/show/new/edit/rm`
 - `backtest run/ls/show/rm`
+- `research ls/show`（只读取目录与元数据，不读取或修改文件正文）
+- `research kernelspecs/kernels/sessions`（只汇总数量和可用性；探测时现有内核、会话均为 0）
+- `research exec`（仅执行 `1 + 1` 的独占临时会话；返回 `ok`/`2`，执行后内核与会话数量恢复为 0）
 - 默认正式回测进入 `/algorithm/backtest/list`
 - `--compile` 编译运行使用 `/algorithm/backtest/buildList`
 
@@ -1138,7 +1273,9 @@ jqcli --env-file .env --format json community clone-strategy <post_id> --backtes
 .venv/bin/python -m pytest
 ```
 
-当前测试覆盖 API 解析、CLI 参数、非交互确认、JSON 输出和配置读取。
+当前测试覆盖 API/SSO 解析、研究路径编码与下载、临时内核/会话执行和清理、CLI 参数、非交互确认、JSON/流式输出和配置读取。
+
+最近一次全量结果为 `270 passed`；另已用 Python 3.9 完成源码语法编译，并验证 wheel 包含 `jqcli.api`、`jqcli.commands`、`jqcli.web` 与静态资源。
 
 ## Codex Skill
 
@@ -1150,6 +1287,6 @@ Install it into the local Codex skills directory:
 .\scripts\install_codex_skill.ps1
 ```
 
-The skill teaches Codex to use the jqcli console entry point, run local and API tests, perform read-only live JoinQuant smoke checks, and run a temporary compile-only write smoke check when explicitly approved.
+The skill teaches Codex to use the jqcli console entry point, run local and API tests, inspect the research workspace and kernel/session availability without exposing identifiers, file names, or contents in smoke summaries, perform read-only live JoinQuant checks, and run explicitly approved temporary execution or compile-only checks with guaranteed cleanup.
 
 Local data, experiments, logs, marketing assets, and local-only helper scripts belong under `local/`, which is ignored by git.
