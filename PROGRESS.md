@@ -1,20 +1,22 @@
 # jqcli 当前进度
 
-更新时间：2026-04-25
+更新时间：2026-08-15
 
 ## 已完成
 
-- 已创建项目虚拟环境 `.venv`，Python 版本为 `3.13.13`。
+- 已创建项目虚拟环境 `.venv`，Python 版本为 `3.13.5`。
 - 已实现基础 MVP：
   - `auth status/logout/import-token/import-cookie/login`
   - `strategy ls/show/new/edit/rm`
   - `backtest run/ls/show/rm`
+  - `research ls/show/download/upload/mkdir/mv/rm`
+  - `research kernelspecs/kernels/sessions/exec/run`
   - `--env-file` 和 `.env` 读取
   - `--non-interactive --format json`
   - 统一错误码和 JSON 错误输出
 - 已添加 `.env` 和 `.env.example`。
 - `.env` 已加入 `.gitignore`，避免提交真实账号密码。
-- 单元测试全量通过，最近一次结果为 `58 passed`。
+- 单元测试全量通过，最近一次结果为 `270 passed`。
 
 ## 真实聚宽登录调研
 
@@ -133,13 +135,38 @@
   - `/algorithm/index/AlgorithmToFile?...`
   - `/algorithm/index/GetFileList?...`
 
+## 研究平台支持
+
+- 2026-08-14 至 2026-08-15 完成研究工作区调研与实现：
+  - 研究平台不复用 `/algorithm/index/*File` 策略文件夹接口，也不是 Community 响应里的 `research.notebook_*` 元数据。
+  - 主站 Cookie 先读取 `/default/research/redirect`，通过同源 JupyterHub/OAuth 重定向建立会话，再从页面发现动态 `/user/<user>/` base path。
+  - 已实现 Contents 读取、下载、上传、建目录、移动/重命名和删除 API/CLI。
+  - 路径拒绝 `.`、`..`、空组件与 NUL；SSO 逐跳校验同源；写请求按实际 Contents 路径选择 `_xsrf`。
+  - 远端写命令均需确认；上传默认不覆盖，仅 `--force` 允许覆盖；根目录不能作为写目标。
+  - 已用真实账号只读验证 `research ls` 和元数据 `research show`，未读取正文，未发送任何研究资产写请求。
+  - 写接口契约依据实例自报的 Jupyter Notebook 5.4.1 同版本官方实现，当前只用 `httpx.MockTransport` 测试固化。
+  - 已确认研究实例开放同版本 Jupyter 内核与会话接口：
+    - `GET api/kernelspecs` 返回 `200`，规格数量为 `3`。
+    - `GET api/kernels` 与 `GET api/sessions` 均返回 `200`，探测时数量均为 `0`。
+    - 对随机且确定不存在的标准 UUID 进行普通 `GET api/kernels/<id>/channels` 返回 `404`；Notebook 5.4.1 官方源码确认该 channels 路由及 WebSocket 消息契约。
+    - 整个开放性探测保持只读，没有启动、连接或停止任何现有 kernel/session，也没有输出名称、标识或 Notebook 路径。
+  - 已增加只读 `research kernelspecs/kernels/sessions`，用于查看可用内核规格及当前内核/会话。
+  - 已增加 `research exec` 与 `research run`：
+    - `exec` 从 `--file` 或 `--code-stdin` 读取代码；`run` 执行用户明确指定的远端 Notebook，可重复传 `--cell` 选择零基索引单元。
+    - `exec` 与 `run` 都创建独占的高熵临时 session 与新内核；`exec` 的合成 session 不保存研究文件，两者绝不复用现有对象，并在成功、错误、超时或中断时从 `finally` 清理。
+    - 两个命令均强制显式 `--yes`；支持 `--kernel`、`--execution-timeout` 与 `--stream`。
+    - `run` 默认且当前始终不保存输出回远端 Notebook。
+  - 已完成最小真实远端执行验收：在独占高熵临时会话中执行 `1 + 1`，返回 `status=ok` 与结果 `2`；执行前后 kernel/session 数量均为 `0`。验收没有读取或保存 Notebook，也没有连接现有内核。
+  - wheel 打包已修正为包含 `jqcli.api`、`jqcli.commands`、`jqcli.web` 及 Web 静态资源。
+
 ## 重启后建议下一步
 
 1. 补强边界行为：
    - `backtest rm` 当前建议传 `backtest ls` 返回的 `list_id`；后续可增加详情 id 到列表 id 的自动解析。
    - `backtest ls` 的指标字段初始 HTML 里可能为 `--`，后续可调用 `/algorithm/backtest/statsList` 合并实时统计。
-2. 增加 README 命令示例和字段说明。
-3. 后续可补分页、文件夹策略同名冲突处理、更多错误码映射。
+2. 如需继续验证错误、超时或中断路径，应仍使用无资产写入的最小临时代码，并在前后比较 kernel/session 数量；不要复用或停止现有对象。
+3. 研究平台如需支持超过 25 MiB 文件，先根据真实实例只读证据补齐分块上传契约。
+4. 后续可补分页、文件夹策略同名冲突处理、更多错误码映射。
 
 ## 注意事项
 

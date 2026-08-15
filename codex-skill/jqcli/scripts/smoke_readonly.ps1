@@ -1,4 +1,9 @@
 $ErrorActionPreference = "Stop"
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
+$OutputEncoding = $Utf8NoBom
+$env:PYTHONUTF8 = "1"
 
 function Find-JqcliRepo {
     $Candidates = @()
@@ -41,9 +46,17 @@ if (-not (Test-Path -LiteralPath $Jqcli)) {
 function Invoke-JqcliJson {
     param([string[]] $Command)
 
-    $Output = & $Jqcli @BaseArgs @Command 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "jqcli $($Command -join ' ') failed: $Output"
+    $PreviousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $Output = & $Jqcli @BaseArgs @Command 2>&1
+        $ExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorAction
+    }
+    if ($ExitCode -ne 0) {
+        $Operation = (@($Command) | Select-Object -First 2) -join " "
+        throw "jqcli $Operation failed with exit code $ExitCode"
     }
     return ($Output | Out-String | ConvertFrom-Json)
 }
@@ -88,6 +101,39 @@ if ($StrategyId) {
         $Summary.backtest_result_ok = [bool] $Result.id
         $Summary.backtest_logs_ok = $null -ne $Logs.logs
     }
+}
+
+$Research = $null
+try {
+    $Research = Invoke-JqcliJson @("research", "ls")
+} catch {
+    if ($_.Exception.Message -match "exit code 1$") {
+        $Summary.research_skipped_not_authenticated = $true
+    } else {
+        throw
+    }
+}
+
+if ($null -ne $Research) {
+    $Summary.research_count = @($Research.items).Count
+    $ResearchPath = if (@($Research.items).Count -gt 0) { [string] $Research.items[0].path } else { $null }
+    $Summary.research_first_path_present = [bool] $ResearchPath
+
+    if ($ResearchPath) {
+        $ResearchItem = Invoke-JqcliJson @("research", "show", $ResearchPath)
+        $Summary.research_show_ok = [bool] $ResearchItem.type
+        $Summary.research_content_requested = $false
+    }
+
+    $KernelSpecs = Invoke-JqcliJson @("research", "kernelspecs")
+    $Kernels = Invoke-JqcliJson @("research", "kernels")
+    $Sessions = Invoke-JqcliJson @("research", "sessions")
+    $Summary.research_kernelspec_count = [int] $KernelSpecs.total
+    $Summary.research_default_kernelspec_present = [bool] $KernelSpecs.default
+    $Summary.research_kernel_count = [int] $Kernels.total
+    $Summary.research_kernels_query_ok = $null -ne $Kernels.total
+    $Summary.research_session_count = [int] $Sessions.total
+    $Summary.research_sessions_query_ok = $null -ne $Sessions.total
 }
 
 $Cloneable = $null

@@ -1,6 +1,6 @@
 ---
 name: jqcli
-description: "Use when Codex needs to operate or maintain the jqcli JoinQuant project: authenticate, inspect strategies, list or run backtests, archive community posts, validate jqcli API behavior, run local tests, perform live JoinQuant smoke checks, or troubleshoot jqcli CLI/API workflows."
+description: "Use when Codex needs to operate or maintain the jqcli JoinQuant project: authenticate, inspect strategies or research files, discover research kernels and sessions, run explicitly approved temporary research code or notebooks, list or run backtests, archive community posts, validate jqcli API behavior, run local tests, perform live JoinQuant smoke checks, or troubleshoot jqcli CLI/API workflows."
 ---
 
 # jqcli
@@ -64,6 +64,12 @@ Prefer read-only live checks before write checks. Run write smoke checks only wh
 For write smoke checks, create a temporary strategy, run compile-only backtest, read result/logs, delete the compile record, and delete the temporary strategy.
 
 Never run `strategy rm`, `backtest rm`, `strategy edit`, or `backtest run` against user assets unless the command targets a temporary smoke-test object or the user explicitly identifies the target.
+
+Research smoke checks are read-only. Prefer `research ls`, metadata-only `research show`, and `research kernelspecs/kernels/sessions`; report only counts and booleans, never research paths, file names, contents, kernel/session identifiers, or kernel-spec names.
+
+Never run `research upload`, `research mkdir`, `research mv`, or `research rm` against user assets during a smoke check. Use those commands only when the user explicitly identifies the target or approves a temporary research object and its cleanup.
+
+Never include `research exec` or `research run` in the standard read-only smoke check. Remote code can have arbitrary side effects, so run it only when the user explicitly approves execution, always pass `--yes`, and use the minimum code or explicitly named Notebook required by the task. Both commands create an exclusive high-entropy temporary session and new kernel; the `exec` session does not save a research file. jqcli cleans them up, never reuses existing objects, and does not save `research run` outputs back to the Notebook.
 
 ## Verification
 

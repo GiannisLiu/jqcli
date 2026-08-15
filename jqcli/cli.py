@@ -63,7 +63,7 @@ def main(
     debug: bool,
     timeout: float | None,
 ) -> None:
-    """聚宽策略与回测管理命令行工具。"""
+    """聚宽策略、回测与研究工作区管理命令行工具。"""
     load_env_file(env_file)
     config = load_config(config_path)
     resolved_token, resolved_cookie = resolve_credentials(config, token=token, cookie=cookie)
@@ -83,12 +83,14 @@ def main(
 from .commands.auth import auth_group
 from .commands.backtest import backtest_group
 from .commands.community import community_group
+from .commands.research import research_group
 from .commands.strategy import strategy_group
 from .commands.web import web_group
 
 main.add_command(auth_group, "auth")
 main.add_command(backtest_group, "backtest")
 main.add_command(community_group, "community")
+main.add_command(research_group, "research")
 main.add_command(strategy_group, "strategy")
 main.add_command(web_group, "web")
 
