@@ -1,8 +1,8 @@
 # jqcli
 
-聚宽（JoinQuant）策略、回测与研究工作区管理命令行工具。
+聚宽（JoinQuant）策略、回测、模拟盘与研究工作区管理命令行工具。
 
-`jqcli` 面向自动化调用和真实聚宽网页接口封装，支持认证、策略管理、正式回测、编译运行记录查询与删除、研究文件管理与远端执行、社区最新文章列表。所有命令都可以使用 `--non-interactive --format json` 作为机器可读主路径。
+`jqcli` 面向自动化调用和真实聚宽网页接口封装，支持认证、策略管理、正式回测、编译运行记录查询与删除、研究文件管理与远端执行、社区最新文章列表，以及[模拟盘信息同步](#模拟盘信息同步)。所有命令都可以使用 `--non-interactive --format json` 作为机器可读主路径。
 
 ## 安装与运行
 
@@ -1275,7 +1275,7 @@ jqcli --non-interactive --format json research rm "临时/demo.py" --yes
 
 当前测试覆盖 API/SSO 解析、研究路径编码与下载、临时内核/会话执行和清理、CLI 参数、非交互确认、JSON/流式输出和配置读取。
 
-最近一次全量结果为 `270 passed`；另已用 Python 3.9 完成源码语法编译，并验证 wheel 包含 `jqcli.api`、`jqcli.commands`、`jqcli.web` 与静态资源。
+研究平台功能验收时全量结果为 `270 passed`；另已用 Python 3.9 完成源码语法编译，并验证 wheel 包含 `jqcli.api`、`jqcli.commands`、`jqcli.web` 与静态资源。本次新增模拟盘测试 22 项，PR 合计 292 项，最新验证结果见 PR。
 
 ## Codex Skill
 
@@ -1290,3 +1290,39 @@ Install it into the local Codex skills directory:
 The skill teaches Codex to use the jqcli console entry point, run local and API tests, inspect the research workspace and kernel/session availability without exposing identifiers, file names, or contents in smoke summaries, perform read-only live JoinQuant checks, and run explicitly approved temporary execution or compile-only checks with guaranteed cleanup.
 
 Local data, experiments, logs, marketing assets, and local-only helper scripts belong under `local/`, which is ignored by git.
+## 模拟盘信息同步
+
+`simulation` 命令只读取模拟仓信息。`orders` 对应聚宽模拟盘页面的下单记录，包含委托数量、委托价格、下单类型、状态、成交数量、成交价格、费用及成交时间等服务端字段。
+
+```powershell
+# 全部模拟盘列表与单个模拟盘详情
+jqcli --format json simulation ls
+jqcli --format json simulation show <模拟盘ID>
+
+# 默认查询北京时间当日；历史查询支持闭区间
+jqcli --format json simulation positions <模拟盘ID>
+jqcli --format json simulation orders <模拟盘ID> --start 2026-09-01 --end 2026-09-18
+jqcli --format json simulation positions <模拟盘ID> --start 2026-09-01 --end 2026-09-18
+
+# 历史累计收益曲线、当日及指定日的日内收益曲线
+jqcli --format json simulation returns <模拟盘ID>
+jqcli --format json simulation returns <模拟盘ID> --today
+jqcli --format json simulation returns <模拟盘ID> --date 2026-09-18
+
+# 同步全部模拟盘，默认从各模拟盘开始日拉取持仓和下单历史
+jqcli --format json simulation sync
+
+# 同步单个模拟盘，限定持仓和下单记录日期范围
+jqcli --format json simulation sync <模拟盘ID> --start 2026-09-01 --end 2026-09-18 --output local/data/simulations/september.json
+```
+
+快照默认写入 `local/data/simulations/snapshot.json`，包含模拟盘列表、详情、逐日持仓与下单记录、全部历史累计收益、北京时间当日日内收益以及最新收益统计。`--start/--end` 只限制持仓和下单历史；历史收益始终完整拉取。当日收益始终指执行当天，与 `--end` 无关。
+
+每次同步重新生成所选范围的快照，成功后原子替换指定文件，不合并旧快照；网络、权限、分页或截断错误会保留已有文件。省略 ID 同步全部模拟盘，提供 ID 时列表仍包含全部模拟盘，但详细数据只包含所选模拟盘。长时间运行的模拟盘首次全量同步会发起较多逐日请求，可先限定范围验证。
+
+数据口径：
+
+- `returns.items[].return` 是聚宽收益曲线原始百分数（`12.3` 表示 `12.3%`），历史曲线为累计收益。`latest_stats` 保留服务端原始字段和单位，例如 `algorithm_return=0.123` 表示 `12.3%`；最新统计不保证是今天的数据。
+- 非交易日或尚未产生数据时，日内收益可能为空，不填零或用上一交易日收益代替；日频模拟盘可能没有日内曲线。
+- 持仓接口可能返回上一交易日快照。`days[].date` 是请求日期，`record_dates` 和各记录的 `time` 表示实际记录日期，现金及总资产保留在 `days[].data`。
+- 持仓及下单记录按日获取，每日默认请求上限为 10000。服务端若返回 `isLimit=true`，查询输出 `complete=false`，整盘同步报错而不发布不完整快照。
