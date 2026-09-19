@@ -1,5 +1,13 @@
 # jqcli Troubleshooting
 
+## Simulation Data Dates and Incomplete Snapshots
+
+- An empty `simulation returns <id> --today` on a non-trading day is valid. Daily-frequency simulations can also lack intraday curves. Keep the date and empty result rather than reporting zero return or the last trading day's return as today's.
+- `positions` may return prior trading-day records. Use `record_dates` and row `time` to label the actual holdings date.
+- `complete=false` in a record query means `isLimit=true` for at least one day. Query that date using `positions/orders --start <date> --end <date>` and inspect the flag. `--limit` defaults to 10000; raising it may help only if the server honors it. Narrowing a multi-day range does not remove a per-day cap. Offset pagination has not been verified for these endpoints.
+- `simulation sync` does not publish partial results. If it fails, the prior output is retained and is not fresh. Check the error, fix authentication or the failing data query, then rerun with the intended scope.
+- Refresh IDs from `simulation ls` when detail resolution fails. Simulation commands require login; `auth status` alone does not remotely verify a saved cookie.
+
 ## CLI Import Error
 
 Symptom:

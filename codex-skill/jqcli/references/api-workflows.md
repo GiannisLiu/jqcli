@@ -1,5 +1,45 @@
 # jqcli API Workflows
 
+## Simulation Read-Only Workflow
+
+Use `simulation ls` to find the requested simulation by name and obtain a fresh ID. Do not substitute a strategy ID or backtest ID. Commands resolve the detail page's internal ID before reading records.
+
+```powershell
+.\.venv\Scripts\jqcli.exe --format json --non-interactive simulation ls
+.\.venv\Scripts\jqcli.exe --format json --non-interactive simulation show <simulation_id>
+.\.venv\Scripts\jqcli.exe --format json --non-interactive simulation positions <simulation_id>
+.\.venv\Scripts\jqcli.exe --format json --non-interactive simulation orders <simulation_id> --start 2026-09-14 --end 2026-09-18
+.\.venv\Scripts\jqcli.exe --format json --non-interactive simulation returns <simulation_id>
+.\.venv\Scripts\jqcli.exe --format json --non-interactive simulation returns <simulation_id> --today
+.\.venv\Scripts\jqcli.exe --format json --non-interactive simulation returns <simulation_id> --date 2026-09-18
+```
+
+Replace example dates with the requested interval. `positions` and `orders` default to today's date in UTC+8; `--end` defaults to `--start`. Date intervals include both endpoints. `orders` reads the simulation's strategy-generated order records, preserving submitted quantity/price, order type, status, filled quantity/price, commission and match time. No order creation or cancellation is performed.
+
+For a bounded live smoke check, select one simulation and a short date interval, then write a dedicated local snapshot:
+
+```powershell
+.\.venv\Scripts\jqcli.exe --format json --non-interactive simulation sync <simulation_id> --start 2026-09-18 --end 2026-09-19 --output local/data/simulations/smoke.json
+```
+
+Omitting the ID syncs all simulations. Omitting `--start` reads holdings and order records from each simulation's start date; full history may require many requests. The existing `smoke_readonly.ps1` covers authentication, strategies, backtests, research metadata and community data; run these simulation checks separately.
+
+`sync` writes a complete replacement snapshot to `local/data/simulations/snapshot.json` by default; it does not merge old data. `--start/--end` constrain holdings and order records only. Historical returns cover the complete available curve, and `today_returns` always uses the execution date. The snapshot also contains the full simulation list and `latest_stats`. Use a separate `--output` when retaining multiple scopes. Failed or truncated syncs leave an existing snapshot intact.
+
+When reporting data:
+
+- Use `historical_returns.items` (or `returns.items`) for cumulative return charts; `return` and `benchmark_return` are percentages (`2.3` means `2.3%`), and `time` is Unix milliseconds. Format timestamps in UTC+8.
+- Latest statistics are under `latest_stats.data.stat`; each metric has `time` and `value` arrays. Fields such as `algorithm_return`, `annual_algo_return`, `max_drawdown`, `intraday_return` and `monthly_return` are decimal ratios. Statistics can have timestamp `0`; date the report from the latest curve point, and do not claim a verified statistics timestamp from `0`.
+- Never call the latest `intraday_return` today's return unless today's data supports it. Non-trading days may have empty `today_returns.items`; daily-frequency simulations may have no intraday curve. Do not replace missing values with zero.
+- For latest holdings, report `record_dates` and row `time`, not merely the requested `date`. A weekend query can return the prior trading day's holdings. Preserve cash and total assets in `days[].data`.
+- Check `complete`. Per-day `isLimit=true` means the server truncated holdings or order records; sync rejects these snapshots. Do not claim a complete history from capped data.
+
+Targeted local verification:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api/test_simulation.py tests/test_commands/test_simulation.py -q
+```
+
 ## Local Tests
 
 Run all tests:
