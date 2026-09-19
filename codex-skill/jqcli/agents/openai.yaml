@@ -1,4 +1,4 @@
 interface:
   display_name: "jqcli"
   short_description: "Operate JoinQuant through jqcli."
-  default_prompt: "Use jqcli to inspect, test, or operate JoinQuant strategies, backtests, community posts, and authentication."
+  default_prompt: "Use $jqcli to inspect, test, or operate JoinQuant strategies, backtests, research workspaces, simulation records and returns, community posts, and authentication."

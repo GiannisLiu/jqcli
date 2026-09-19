@@ -1,6 +1,6 @@
 # jqcli 设计文档
 
-聚宽（JoinQuant）策略、回测与研究工作区管理命令行工具。
+聚宽（JoinQuant）策略、回测、模拟盘与研究工作区管理命令行工具。
 
 MVP 目标：在 Windows 和常见命令行环境中稳定运行，并能被 agent/skill 以非交互方式调用。人类友好的表格、确认提示、编辑器集成可以提供，但不能影响自动化主路径。
 
@@ -23,6 +23,7 @@ jqcli
 ├── auth        认证管理
 ├── strategy    策略管理
 ├── backtest    回测管理
+├── simulation  模拟盘信息查询与同步
 ├── research    研究文件管理
 ├── community   社区文章
 └── web         本地文章管理界面
@@ -248,6 +249,24 @@ WS     <base>/api/kernels/<kernel_id>/channels?session_id=<client_session_id>
 时间使用 ISO 8601；CLI 日期输入使用 `YYYY-MM-DD`；百分比在 JSON 中使用小数值，例如 `0.1832`。
 
 ---
+
+## 模拟盘只读同步（2026-09-19）
+
+命令为 `simulation ls/show/positions/orders/returns/sync`。`orders` 表示模拟仓策略产生的下单记录；不提交或撤销订单。命令用法见 [README](README.md#模拟盘信息同步)，自动化流程见 [skill 工作流](codex-skill/jqcli/references/api-workflows.md#simulation-read-only-workflow)。
+
+| 数据 | 已验证接口 | 参数与处理 |
+|---|---|---|
+| 模拟列表 | `/algorithm/trade/list` | AJAX JSON；按 `page` 拉取 `liveArr`，以 `totalCount` 判定完成 |
+| 模拟详情 | `/algorithm/live/index` | `backtestId`；解析 HTML 中内部 ID、开始日期、频率、状态 |
+| 持仓 | `/algorithm/live/position` | `backtestId/date/limit/isForward=0`；逐日读取 `position` |
+| 下单记录 | `/algorithm/live/transactionDetail` | `backtestId/date/limit`；逐日读取 `transaction` |
+| 历史累计收益 | `/algorithm/backtest/result` | 从 `offset=0` 开始，以实际返回条数推进，直到 `count=0` |
+| 日内收益 | `/algorithm/backtest/dayResult` | `backtestId/date`；读取指定日期完整日内序列 |
+| 最新统计 | `/algorithm/live/stat` | `backtestId/offset=-1/limit=1`；保留原始字段和单位 |
+
+收益曲线的数值单位是百分数，统计字段多数为小数比例；不得混用。默认当日取北京时间。非交易日日内收益可为空，最新统计也不代表执行当天；持仓请求日期与记录日期分别通过 `date` 和 `record_dates` 表达。
+
+`sync` 输出 `schema_version=1` 的 JSON 快照，含 `list` 和所选模拟盘的 `detail/positions/orders/historical_returns/today_returns/latest_stats`。日期范围只限制持仓与下单记录。默认路径为 `local/data/simulations/snapshot.json`，成功后原子替换，不合并旧快照。业务错误、非法结构、列表重复页、收益偏移未前进、分页上限及每日截断均不能静默报告完整；同步失败保留旧快照。持仓和下单接口未验证偏移分页，通过提高日请求 limit 并检查 `isLimit` 检测完整性。
 
 ## 六、命令设计
 

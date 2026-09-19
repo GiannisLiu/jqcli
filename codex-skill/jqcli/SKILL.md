@@ -1,6 +1,6 @@
 ---
 name: jqcli
-description: "Use when Codex needs to operate or maintain the jqcli JoinQuant project: authenticate, inspect strategies or research files, discover research kernels and sessions, run explicitly approved temporary research code or notebooks, list or run backtests, archive community posts, validate jqcli API behavior, run local tests, perform live JoinQuant smoke checks, or troubleshoot jqcli CLI/API workflows."
+description: "Use when Codex needs to operate or maintain the jqcli JoinQuant project: authenticate, inspect strategies or research files, discover research kernels and sessions, run explicitly approved temporary research code or notebooks, list or run backtests, query or sync simulation positions, order records and returns, archive community posts, validate APIs, run tests, or troubleshoot CLI workflows."
 ---
 
 # jqcli
@@ -46,6 +46,8 @@ Do not move `local/` contents back to the repo root. When adding new generated o
 ## Common Workflows
 
 Read `references/api-workflows.md` when the user asks to run jqcli commands, test APIs, validate live JoinQuant compatibility, or perform read/write smoke checks.
+
+For simulation lists, holdings, strategy-generated order records, historical returns, or today's returns, use the simulation workflow in `references/api-workflows.md`. `simulation` is read-only on JoinQuant; `sync` writes a local snapshot. It does not submit or cancel orders.
 
 Read `references/troubleshooting.md` when a command fails, authentication behaves oddly, tests fail, or live API responses look like login redirects or "system busy" responses.
 
